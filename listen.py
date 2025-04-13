@@ -35,9 +35,9 @@ def main():
     # Create the pipeline for MPEG-TS streaming and recording
     pipeline_str = (
         "udpsrc port=5004 ! "
-        "mpegtsdemux ! "
-        "mp3parse ! "
-        "mp3dec ! "
+        "tsdemux ! "
+        "mpegaudioparse ! "
+        "avdec_mp3 ! "
         "audioconvert ! "
         "audioresample ! "
         "audio/x-raw,format=S16LE,rate=44100,channels=2 ! "
