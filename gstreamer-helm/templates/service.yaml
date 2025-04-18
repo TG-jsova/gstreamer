@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gstreamer.fullname" . }}
+  labels:
+    {{- include "gstreamer.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.gstreamer.udpPort }}
+      targetPort: udp
+      protocol: UDP
+      name: udp
+  selector:
+    {{- include "gstreamer.selectorLabels" . | nindent 4 }} 

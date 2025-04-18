@@ -9,6 +9,17 @@ import signal
 import json
 import socket
 import logging
+import gi
+import time
+import threading
+from datetime import datetime
+
+# Configure GStreamer
+gi.require_version('Gst', '1.0')
+from gi.repository import Gst, GLib
+
+# Initialize GStreamer
+Gst.init(None)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,10 +32,111 @@ active_streams = {}
 UPLOAD_DIR = "/app/uploads"
 MULTICAST_IP = "239.255.1.1"  # Default multicast IP
 MULTICAST_PORT = 5004  # Default multicast port
+BUFFER_DURATION = 0.5  # Default buffer duration in seconds
 
 class StreamRequest(BaseModel):
     multicast_ip: Optional[str] = MULTICAST_IP
     multicast_port: Optional[int] = MULTICAST_PORT
+    buffer_duration: Optional[float] = BUFFER_DURATION
+
+class GStreamerMulticastStreamer:
+    def __init__(self, file_path, multicast_address, port, buffer_duration=0.5):
+        self.file_path = file_path
+        self.multicast_address = multicast_address
+        self.port = port
+        self.buffer_duration = buffer_duration
+        self.pipeline = None
+        self.loop = None
+        self.buffer_filled = False
+        self.buffer_start_time = None
+        self.is_playing = False
+        self.is_finished = False
+        self.thread = None
+        
+    def on_message(self, bus, message):
+        mtype = message.type
+        if mtype == Gst.MessageType.EOS:
+            logger.info("End of stream")
+            self.is_finished = True
+            self.loop.quit()
+        elif mtype == Gst.MessageType.ERROR:
+            err, debug = message.parse_error()
+            logger.error(f"Error: {err}, {debug}")
+            self.is_finished = True
+            self.loop.quit()
+        elif mtype == Gst.MessageType.STATE_CHANGED:
+            old_state, new_state, pending_state = message.parse_state_changed()
+            logger.info(f"State changed from {old_state.value_name} to {new_state.value_name}")
+            
+            # When pipeline is ready, start buffering
+            if new_state == Gst.State.PAUSED and not self.buffer_filled:
+                self.buffer_start_time = time.time()
+                logger.info(f"Starting buffer of {self.buffer_duration} seconds...")
+                
+            # When buffer is filled, start playing
+            if new_state == Gst.State.PAUSED and self.buffer_start_time:
+                elapsed = time.time() - self.buffer_start_time
+                if elapsed >= self.buffer_duration and not self.buffer_filled:
+                    self.buffer_filled = True
+                    logger.info("Buffer filled, starting playback...")
+                    self.pipeline.set_state(Gst.State.PLAYING)
+                    self.is_playing = True
+    
+    def create_pipeline(self):
+        # Create the pipeline for MPEG-TS streaming
+        pipeline_str = (
+            f"filesrc location={self.file_path} ! "
+            "decodebin ! "
+            "audioconvert ! "
+            "audioresample ! "
+            "audio/x-raw,format=S16LE,rate=44100,channels=2 ! "
+            "queue max-size-buffers=0 max-size-bytes=0 max-size-time=0 ! "
+            "lamemp3enc bitrate=192 ! "
+            "mpegtsmux ! "
+            f"udpsink host={self.multicast_address} port={self.port} sync=false"
+        )
+        
+        logger.info(f"Creating pipeline: {pipeline_str}")
+        self.pipeline = Gst.parse_launch(pipeline_str)
+        
+        # Create a loop
+        self.loop = GLib.MainLoop()
+        
+        # Add message handler
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message", self.on_message, self.loop)
+    
+    def run(self):
+        # Start in PAUSED state to fill buffer
+        self.pipeline.set_state(Gst.State.PAUSED)
+        logger.info(f"Starting multicast stream on {self.multicast_address}:{self.port}")
+        logger.info("Buffering audio before starting playback...")
+        
+        try:
+            self.loop.run()
+        except Exception as e:
+            logger.error(f"Error in GStreamer loop: {str(e)}")
+        finally:
+            self.pipeline.set_state(Gst.State.NULL)
+            self.loop.quit()
+    
+    def start(self):
+        # Create and start the pipeline in a separate thread
+        self.create_pipeline()
+        self.thread = threading.Thread(target=self.run)
+        self.thread.daemon = True
+        self.thread.start()
+    
+    def stop(self):
+        if self.pipeline:
+            self.pipeline.set_state(Gst.State.NULL)
+        if self.loop:
+            self.loop.quit()
+        if self.thread:
+            self.thread.join(timeout=2.0)
+        self.is_playing = False
+        self.is_finished = True
 
 @app.on_event("startup")
 async def startup_event():
@@ -61,6 +173,7 @@ async def play_stream(bay_id: str, request: StreamRequest = None):
     
     multicast_ip = request.multicast_ip
     multicast_port = request.multicast_port
+    buffer_duration = request.buffer_duration
     
     # Check if there's already an active stream
     if active_streams:
@@ -84,34 +197,19 @@ async def play_stream(bay_id: str, request: StreamRequest = None):
     logger.info(f"Found MP3 file: {file_path}")
     
     try:
-        # Create GStreamer pipeline for streaming using MPEG-TS format
-        # This format is directly playable by VLC
-        cmd = [
-            "gst-launch-1.0", "-v",
-            "filesrc", f"location={file_path}",
-            "!", "decodebin",
-            "!", "audioconvert",
-            "!", "audioresample",
-            "!", "audio/x-raw,format=S16LE,rate=44100,channels=2",
-            "!", "lamemp3enc", "bitrate=192",
-            "!", "mpegtsmux",
-            "!", "udpsink", f"host={multicast_ip}", f"port={multicast_port}"
-        ]
-        
-        # Run the pipeline with output capture
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
+        # Create a GStreamerMulticastStreamer instance
+        streamer = GStreamerMulticastStreamer(
+            file_path=file_path,
+            multicast_address=multicast_ip,
+            port=multicast_port,
+            buffer_duration=buffer_duration
         )
         
-        # Store the process
-        active_streams[bay_id] = process
+        # Start the streamer
+        streamer.start()
         
-        # Start a background task to monitor the process output
-        asyncio.create_task(monitor_process_output(process, bay_id))
+        # Store the streamer
+        active_streams[bay_id] = streamer
         
         return JSONResponse(content={
             "message": f"Started streaming for bay {bay_id} to {multicast_ip}:{multicast_port}",
@@ -121,41 +219,14 @@ async def play_stream(bay_id: str, request: StreamRequest = None):
         logger.error(f"Error starting GStreamer pipeline: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def monitor_process_output(process, bay_id):
-    """Monitor the output of the GStreamer process and log it."""
-    try:
-        while True:
-            # Read stdout
-            stdout_line = process.stdout.readline()
-            if stdout_line:
-                logger.info(f"GStreamer [{bay_id}] stdout: {stdout_line.strip()}")
-            
-            # Read stderr
-            stderr_line = process.stderr.readline()
-            if stderr_line:
-                logger.error(f"GStreamer [{bay_id}] stderr: {stderr_line.strip()}")
-            
-            # Check if process has terminated
-            if process.poll() is not None:
-                logger.info(f"GStreamer process for bay {bay_id} terminated with code {process.returncode}")
-                if bay_id in active_streams:
-                    del active_streams[bay_id]
-                break
-            
-            # Small delay to prevent CPU hogging
-            await asyncio.sleep(0.1)
-    except Exception as e:
-        logger.error(f"Error monitoring GStreamer process: {str(e)}")
-
 @app.post("/stop/{bay_id}")
 async def stop_stream(bay_id: str):
     if bay_id not in active_streams:
         raise HTTPException(status_code=404, detail=f"No active stream found for bay {bay_id}")
     
-    process = active_streams[bay_id]
+    streamer = active_streams[bay_id]
     logger.info(f"Stopping GStreamer process for bay {bay_id}")
-    process.terminate()
-    process.wait()
+    streamer.stop()
     del active_streams[bay_id]
     
     return JSONResponse(content={"message": f"Stopped streaming for bay {bay_id}"})
@@ -170,7 +241,6 @@ async def get_status():
 # Cleanup on shutdown
 @app.on_event("shutdown")
 async def shutdown_event():
-    for process in active_streams.values():
-        process.terminate()
-        process.wait()
+    for streamer in active_streams.values():
+        streamer.stop()
     active_streams.clear() 

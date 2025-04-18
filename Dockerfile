@@ -1,12 +1,23 @@
-FROM python:3.9-slim
+FROM ubuntu:20.04
 
-# Install system dependencies including GStreamer
+# Avoid interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and GStreamer dependencies
 RUN apt-get update && apt-get install -y \
+    python3.9 \
+    python3.9-dev \
+    python3-pip \
+    python3-gi \
+    python3-gi-cairo \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
     gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
     iputils-ping \
     net-tools \
     && rm -rf /var/lib/apt/lists/*
@@ -16,7 +27,7 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Create upload directory
 RUN mkdir -p /app/uploads
@@ -31,4 +42,4 @@ EXPOSE 8000
 # Example: docker run --network host --cap-add=NET_ADMIN --cap-add=NET_RAW mp3-streamer
 
 # Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"] 
+CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"] 
