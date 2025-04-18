@@ -18,7 +18,8 @@ def on_message(bus, message, loop):
         loop.quit()
     elif mtype == Gst.MessageType.STATE_CHANGED:
         old_state, new_state, pending_state = message.parse_state_changed()
-        print(f"State changed from {old_state.value_name} to {new_state.value_name}")
+        element = message.src.get_name()
+        print(f"State changed in {element} from {old_state.value_name} to {new_state.value_name}")
 
 def main():
     # Initialize GStreamer
@@ -32,10 +33,9 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = os.path.join(output_dir, f"stream_{timestamp}.wav")
     
-    # Create the pipeline for MPEG-TS streaming and recording
+    # Create the pipeline for MP3 streaming and recording
     pipeline_str = (
         "udpsrc port=5004 ! "
-        "tsdemux ! "
         "mpegaudioparse ! "
         "avdec_mp3 ! "
         "audioconvert ! "

@@ -53,47 +53,70 @@ class GStreamerMulticastStreamer:
         self.is_finished = False
         self.thread = None
         
-    def on_message(self, bus, message):
+    def on_message(self, bus, message, loop):
         mtype = message.type
         if mtype == Gst.MessageType.EOS:
             logger.info("End of stream")
             self.is_finished = True
+            # Remove from active streams
+            for bay_id, streamer in list(active_streams.items()):
+                if streamer == self:
+                    logger.info(f"Removing completed stream for bay {bay_id}")
+                    del active_streams[bay_id]
+            # Quit the loop to stop the stream
             self.loop.quit()
         elif mtype == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
             logger.error(f"Error: {err}, {debug}")
+            # Get more detailed information about the error
+            element = message.src.get_name()
+            logger.error(f"Error occurred in element: {element}")
             self.is_finished = True
+            # Remove from active streams
+            for bay_id, streamer in list(active_streams.items()):
+                if streamer == self:
+                    logger.info(f"Removing error stream for bay {bay_id}")
+                    del active_streams[bay_id]
+            # Quit the loop to stop the stream
             self.loop.quit()
         elif mtype == Gst.MessageType.STATE_CHANGED:
             old_state, new_state, pending_state = message.parse_state_changed()
-            logger.info(f"State changed from {old_state.value_name} to {new_state.value_name}")
+            element = message.src.get_name()
+            logger.info(f"State changed in {element} from {old_state.value_name} to {new_state.value_name}")
             
             # When pipeline is ready, start buffering
-            if new_state == Gst.State.PAUSED and not self.buffer_filled:
+            if new_state == Gst.State.PAUSED and not self.buffer_filled and element == "pipeline0":
                 self.buffer_start_time = time.time()
                 logger.info(f"Starting buffer of {self.buffer_duration} seconds...")
                 
             # When buffer is filled, start playing
-            if new_state == Gst.State.PAUSED and self.buffer_start_time:
+            if new_state == Gst.State.PAUSED and self.buffer_start_time and element == "pipeline0":
                 elapsed = time.time() - self.buffer_start_time
                 if elapsed >= self.buffer_duration and not self.buffer_filled:
                     self.buffer_filled = True
                     logger.info("Buffer filled, starting playback...")
                     self.pipeline.set_state(Gst.State.PLAYING)
                     self.is_playing = True
+        elif mtype == Gst.MessageType.DURATION_CHANGED:
+            # Log the duration of the stream
+            duration = self.pipeline.query_duration(Gst.Format.TIME)[1] / Gst.SECOND
+            logger.info(f"Stream duration: {duration:.3f} seconds")
+        elif mtype == Gst.MessageType.STREAM_START:
+            logger.info("Stream started")
+        elif mtype == Gst.MessageType.NEW_CLOCK:
+            logger.info("New clock selected")
     
     def create_pipeline(self):
-        # Create the pipeline for MPEG-TS streaming
+        # Create the pipeline for MP3 streaming over UDP
         pipeline_str = (
             f"filesrc location={self.file_path} ! "
             "decodebin ! "
             "audioconvert ! "
             "audioresample ! "
             "audio/x-raw,format=S16LE,rate=44100,channels=2 ! "
-            "queue max-size-buffers=0 max-size-bytes=0 max-size-time=0 ! "
             "lamemp3enc bitrate=192 ! "
-            "mpegtsmux ! "
-            f"udpsink host={self.multicast_address} port={self.port} sync=false"
+            "queue max-size-buffers=100 ! "
+            f"udpsink host={self.multicast_address} port={self.port} sync=true"
         )
         
         logger.info(f"Creating pipeline: {pipeline_str}")
@@ -106,18 +129,64 @@ class GStreamerMulticastStreamer:
         bus = self.pipeline.get_bus()
         bus.add_signal_watch()
         bus.connect("message", self.on_message, self.loop)
+        
+        # Add a probe to the sink pad of the udpsink to monitor data flow
+        sink = self.pipeline.get_by_name("udpsink0")
+        if sink:
+            sinkpad = sink.get_static_pad("sink")
+            if sinkpad:
+                sinkpad.add_probe(Gst.PadProbeType.BUFFER, self.on_buffer_probe, None)
+                logger.info("Added buffer probe to udpsink")
+            else:
+                logger.warning("Could not get sink pad from udpsink")
+        else:
+            logger.warning("Could not find udpsink element in pipeline")
+    
+    def on_buffer_probe(self, pad, info, user_data):
+        # Log buffer information
+        buffer = info.get_buffer()
+        pts = buffer.pts / Gst.SECOND if buffer.pts != Gst.CLOCK_TIME_NONE else 0
+        duration = buffer.duration / Gst.SECOND if buffer.duration != Gst.CLOCK_TIME_NONE else 0
+        size = buffer.get_size()
+        logger.info(f"Buffer: pts={pts:.3f}s, duration={duration:.3f}s, size={size} bytes")
+        return Gst.PadProbeReturn.OK
     
     def run(self):
         # Start in PAUSED state to fill buffer
-        self.pipeline.set_state(Gst.State.PAUSED)
+        ret = self.pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            logger.error("Failed to set pipeline to PAUSED state")
+            self.is_finished = True
+            return
+        
         logger.info(f"Starting multicast stream on {self.multicast_address}:{self.port}")
         logger.info("Buffering audio before starting playback...")
+        
+        # Set a timer to transition to PLAYING state after buffer_duration + 1 second
+        # This is a fallback in case the state change message is not received
+        def start_playback():
+            if not self.is_playing and not self.is_finished:
+                logger.info("Fallback: Transitioning to PLAYING state")
+                self.pipeline.set_state(Gst.State.PLAYING)
+                self.is_playing = True
+        
+        # Schedule the playback start after buffer_duration + 1 second
+        GLib.timeout_add(int((self.buffer_duration + 1) * 1000), start_playback)
+        
+        # Log the start time
+        start_time = time.time()
+        logger.info(f"Playback started at {start_time}")
         
         try:
             self.loop.run()
         except Exception as e:
             logger.error(f"Error in GStreamer loop: {str(e)}")
+            self.is_finished = True
         finally:
+            # Log the end time and total duration
+            end_time = time.time()
+            total_duration = end_time - start_time
+            logger.info(f"Playback ended at {end_time}, total duration: {total_duration:.3f} seconds")
             self.pipeline.set_state(Gst.State.NULL)
             self.loop.quit()
     
@@ -129,11 +198,13 @@ class GStreamerMulticastStreamer:
         self.thread.start()
     
     def stop(self):
+        logger.info("Stopping GStreamer stream")
         if self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
         if self.loop:
             self.loop.quit()
-        if self.thread:
+        # Don't try to join the thread if we're in the same thread
+        if self.thread and self.thread != threading.current_thread():
             self.thread.join(timeout=2.0)
         self.is_playing = False
         self.is_finished = True
