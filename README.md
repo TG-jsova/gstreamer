@@ -10,6 +10,7 @@ A robust, self-healing GStreamer-based desktop streaming service with comprehens
 - **Configurable Quality**: Adjustable resolution, bitrate, and frame rate
 - **Low Latency**: Optimized for real-time streaming
 - **Live Streaming Optimized**: Minimal segment storage for live feeds
+- **Docker Support**: Containerized deployment with full hardware acceleration
 
 ### Self-Healing & Monitoring
 - **Health Monitoring**: Continuous monitoring of pipeline state and performance
@@ -73,6 +74,28 @@ The installation script will:
 - Configure resource limits for Unity workload coexistence
 - Set up log rotation and automatic cleanup
 - Enable systemd services with proper resource constraints
+
+### Docker Installation
+
+For containerized deployment:
+
+```bash
+# Build and run with Docker Compose
+docker-compose up -d
+
+# Or build manually
+docker build -f Dockerfile.desktop-streamer -t desktop-streamer .
+docker run -d \
+  --name desktop-streamer \
+  --network host \
+  --privileged \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v /dev/shm:/dev/shm:rw \
+  -v /etc/desktop-streamer:/etc/desktop-streamer:ro \
+  -v /var/log:/var/log \
+  -e DISPLAY=:0 \
+  desktop-streamer
+```
 
 ### Manual Installation
 
@@ -168,6 +191,18 @@ sudo systemctl status desktop-streamer-watchdog.service
 
 # Quick status check
 desktop-streamer-monitor
+```
+
+### Docker Usage
+```bash
+# Start with Docker Compose
+docker-compose up -d
+
+# Check logs
+docker-compose logs -f desktop-streamer
+
+# Stop services
+docker-compose down
 ```
 
 ### Accessing the System
@@ -448,12 +483,30 @@ Alerts are triggered for:
    df -h /tmp
    ```
 
+6. **Docker Issues**:
+   ```bash
+   # Check container status
+   docker ps -a
+   
+   # Check container logs
+   docker logs desktop-streamer
+   
+   # Check X11 forwarding
+   xhost +local:docker
+   
+   # Rebuild container
+   docker-compose down
+   docker-compose build --no-cache
+   docker-compose up -d
+   ```
+
 ### Log Locations
 
 - **Main Service**: `/var/log/desktop-streamer.log`
 - **Watchdog**: `/var/log/desktop-streamer-watchdog.log`
 - **Systemd**: `sudo journalctl -u desktop-streamer.service`
 - **Systemd Watchdog**: `sudo journalctl -u desktop-streamer-watchdog.service`
+- **Docker**: `docker logs desktop-streamer`
 
 ### Performance Tuning
 
@@ -494,6 +547,7 @@ Alerts are triggered for:
 3. **API Access**: Health API is publicly accessible - implement authentication if needed
 4. **Log Security**: Logs may contain sensitive information - secure log files appropriately
 5. **Resource Limits**: Configured to prevent resource exhaustion attacks
+6. **Docker Security**: Container runs with privileged mode for hardware access
 
 ## 📊 Performance Metrics
 
@@ -507,6 +561,29 @@ The system provides comprehensive performance metrics:
 - **Recovery Time**: Time to recover from failures
 - **Live Streaming**: Segment count and cleanup frequency
 - **Unity Coexistence**: Resource usage and conflicts
+
+## 🧪 Testing
+
+### Test Scripts
+
+The project includes several testing utilities:
+
+- **`test_streamer.py`**: Automated testing of streaming functionality
+- **`run_test.py`**: Comprehensive system testing
+- **`test_stream.sh`**: Shell script for quick testing
+
+### Running Tests
+
+```bash
+# Run automated tests
+python3 test_streamer.py
+
+# Run comprehensive tests
+python3 run_test.py
+
+# Quick test script
+./test_stream.sh
+```
 
 ## 🤝 Contributing
 
@@ -532,4 +609,4 @@ For issues and questions:
 
 ---
 
-**Note**: This system is designed for production use with comprehensive monitoring and self-healing capabilities. The kiosk optimizations ensure stable 24/7 operation with Unity workloads, while the live streaming optimizations maintain minimal resource usage for real-time feeds.
+**Note**: This system is designed for production use with comprehensive monitoring and self-healing capabilities. The kiosk optimizations ensure stable 24/7 operation with Unity workloads, while the live streaming optimizations maintain minimal resource usage for real-time feeds. Docker support provides easy deployment and isolation for containerized environments.
