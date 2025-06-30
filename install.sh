@@ -86,8 +86,8 @@ print_status "Installing MediaMTX..."
 if ! command -v mediamtx &> /dev/null; then
     mkdir -p /tmp/mediamtx
     cd /tmp/mediamtx
-    wget https://github.com/bluenviron/mediamtx/releases/download/v1.12.3/mediamtx_v1.12.3_linux_arm64.tar.gz
-    tar -xzf mediamtx_v1.12.3_linux_arm64.tar.gz
+    wget https://github.com/bluenviron/mediamtx/releases/download/v1.12.3/mediamtx_v1.12.3_linux_amd64.tar.gz
+    tar -xzf mediamtx_v1.12.3_linux_amd64.tar.gz
     mv mediamtx /usr/local/bin/
     chmod +x /usr/local/bin/mediamtx
     # rm mediamtx_linux_amd64.tar.gz
