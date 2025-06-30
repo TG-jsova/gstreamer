@@ -1,0 +1,42 @@
+[Unit]
+Description=Desktop Streamer Service
+Documentation=https://github.com/your-repo/desktop-streamer
+After=network.target display-manager.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/ubuntu/.Xauthority
+Environment=PYTHONUNBUFFERED=1
+
+# Set working directory
+WorkingDirectory=/opt/desktop-streamer
+
+# ExecStart command
+ExecStart=/usr/bin/python3 /opt/desktop-streamer/desktop_streamer.py
+
+# Restart configuration
+Restart=always
+RestartSec=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp /var/log /etc/desktop-streamer
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Kill configuration
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target 

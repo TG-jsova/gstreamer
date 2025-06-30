@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  desktop-streamer:
+    build:
+      context: .
+      dockerfile: Dockerfile.desktop-streamer
+    container_name: desktop-streamer
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev/shm:/dev/shm:rw
+      - /etc/desktop-streamer:/etc/desktop-streamer:ro
+      - /var/log:/var/log
+      - hls_data:/tmp/hls
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - PYTHONUNBUFFERED=1
+    privileged: true
+    network_mode: host
+    devices:
+      - /dev/dri:/dev/dri
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://0.0.0.0:8888/hls/desktop/playlist.m3u8"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  hls_data:
+    driver: local 

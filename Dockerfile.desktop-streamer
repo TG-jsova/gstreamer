@@ -1,0 +1,99 @@
+FROM ubuntu:22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:0
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-gi \
+    python3-gi-cairo \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
+    gir1.2-gst-plugins-bad-1.0 \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-tools \
+    gstreamer1.0-x \
+    gstreamer1.0-alsa \
+    gstreamer1.0-gl \
+    gstreamer1.0-gtk3 \
+    gstreamer1.0-qt5 \
+    gstreamer1.0-pulseaudio \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev \
+    gstreamer1.0-plugins-base-apps \
+    gstreamer1.0-plugins-good-apps \
+    gstreamer1.0-plugins-bad-apps \
+    gstreamer1.0-plugins-ugly-apps \
+    gstreamer1.0-libav-apps \
+    gstreamer1.0-tools-apps \
+    gstreamer1.0-x-apps \
+    gstreamer1.0-alsa-apps \
+    gstreamer1.0-gl-apps \
+    gstreamer1.0-gtk3-apps \
+    gstreamer1.0-qt5-apps \
+    gstreamer1.0-pulseaudio-apps \
+    x11-apps \
+    xvfb \
+    x11vnc \
+    xrandr \
+    x11-utils \
+    xauth \
+    curl \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install MediaMTX
+RUN wget -O /tmp/mediamtx.tar.gz https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_linux_amd64.tar.gz \
+    && tar -xzf /tmp/mediamtx.tar.gz -C /usr/local/bin/ \
+    && chmod +x /usr/local/bin/mediamtx \
+    && rm /tmp/mediamtx.tar.gz
+
+# Create application directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY desktop_streamer_requirements.txt .
+RUN pip3 install -r desktop_streamer_requirements.txt
+
+# Copy application files
+COPY desktop_streamer.py .
+RUN chmod +x desktop_streamer.py
+
+# Create necessary directories
+RUN mkdir -p /tmp/hls /var/log /etc/desktop-streamer
+
+# Create default configuration
+RUN echo '{"fps": 30, "width": 1920, "height": 1080, "bitrate": 5000, "keyframe_interval": 2, "segment_duration": 2, "output_dir": "/tmp/hls"}' > /etc/desktop-streamer/config.json
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+# Start Xvfb for headless operation\n\
+Xvfb :0 -screen 0 1920x1080x24 &\n\
+sleep 2\n\
+\n\
+# Set display\n\
+export DISPLAY=:0\n\
+\n\
+# Start the desktop streamer\n\
+python3 /app/desktop_streamer.py\n\
+' > /app/start.sh && chmod +x /app/start.sh
+
+# Expose ports
+EXPOSE 8888
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://0.0.0.0:8888/hls/desktop/playlist.m3u8 || exit 1
+
+# Set the default command
+CMD ["/app/start.sh"] 
