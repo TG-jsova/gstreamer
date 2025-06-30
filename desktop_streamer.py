@@ -372,18 +372,32 @@ class DesktopStreamer:
         
         # Get monitor info
         monitor_info = self.get_monitor_info()
-        if len(monitor_info['monitors']) < 2:
-            logger.warning("Less than 2 monitors detected, using primary monitor")
-            monitor_index = 0
-        else:
-            monitor_index = 1  # Use second monitor
+        screen_index = self.config.get('screen', 1)  # Default to second screen
         
-        # Pipeline configuration with Unity workload optimization
+        if len(monitor_info['monitors']) <= screen_index:
+            logger.warning(f"Screen {screen_index} not available, using primary monitor (0)")
+            screen_index = 0
+        
+        logger.info(f"Using screen {screen_index}: {monitor_info['monitors'][screen_index]}")
+        
+        # Pipeline configuration with real-time optimization
         fps = self.config.get('fps', 30)
         width = self.config.get('width', 1920)
         height = self.config.get('height', 1080)
-        bitrate = self.config.get('bitrate', 5000)  # kbps
-        keyframe_interval = self.config.get('keyframe_interval', 2)  # seconds
+        bitrate = self.config.get('bitrate', 8000)  # kbps
+        keyframe_interval = self.config.get('keyframe_interval', 1)  # seconds for real-time
+        
+        # Real-time configuration
+        real_time_config = self.config.get('real_time', {})
+        real_time_enabled = real_time_config.get('enabled', True)
+        target_latency_ms = real_time_config.get('target_latency_ms', 100)
+        buffer_size = real_time_config.get('buffer_size', 0.1)  # seconds
+        drop_frames = real_time_config.get('drop_frames', True)
+        
+        # Live streaming configuration
+        live_config = self.config.get('live_streaming', {})
+        max_segments = live_config.get('max_segments', 3)
+        segment_duration = self.config.get('segment_duration', 1)  # 1 second for minimal latency
         
         # Optimize for AMD SOC with Unity workloads
         # Use hardware acceleration if available
@@ -406,41 +420,59 @@ class DesktopStreamer:
         # Create HLS playlist path
         playlist_path = self.output_dir / "playlist.m3u8"
         segment_path = self.output_dir / "segment_%05d.ts"
-        segment_duration = self.config.get('segment_duration', 2)  # seconds
         
-        # Optimize pipeline for Unity workload coexistence
+        # Real-time optimized pipeline
         if encoder == 'vaapih264enc':
+            # Hardware encoder with real-time optimization
             pipeline_str = (
-                f"ximagesrc monitor={monitor_index} ! "
+                f"ximagesrc monitor={screen_index} ! "
                 f"video/x-raw,framerate={fps}/1,width={width},height={height} ! "
                 "videoconvert ! "
                 "videoscale ! "
                 f"video/x-raw,format=NV12,width={width},height={height},framerate={fps}/1 ! "
-                f"vaapih264enc bitrate={bitrate} keyframe-period={fps * keyframe_interval} ! "
+                f"vaapih264enc bitrate={bitrate} keyframe-period={fps * keyframe_interval} "
+                f"tune=lowlatency ! "
                 "video/x-h264,profile=baseline ! "
                 "h264parse ! "
                 "mpegtsmux ! "
                 f"hlssink2 location={segment_path} playlist-location={playlist_path} "
-                f"target-duration={segment_duration} max-files=5"
+                f"target-duration={segment_duration} max-files={max_segments}"
             )
         else:
-            # Software encoder with Unity workload optimization
+            # Software encoder with real-time optimization
+            real_time_params = ""
+            if real_time_enabled:
+                real_time_params = (
+                    f"tune=zerolatency speed-preset=ultrafast "
+                    f"key-int-max={fps * keyframe_interval} "
+                    f"bframes=0 ref=1 threads=2 "
+                    f"rc-lookahead=0"
+                )
+            
             pipeline_str = (
-                f"ximagesrc monitor={monitor_index} ! "
+                f"ximagesrc monitor={screen_index} ! "
                 f"video/x-raw,framerate={fps}/1,width={width},height={height} ! "
                 "videoconvert ! "
                 "videoscale ! "
                 f"video/x-raw,format=I420,width={width},height={height},framerate={fps}/1 ! "
-                f"x264enc bitrate={bitrate} speed-preset=ultrafast key-int-max={fps * keyframe_interval} "
-                f"tune=zerolatency threads=2 ! "
+                f"x264enc bitrate={bitrate} {real_time_params} ! "
                 "video/x-h264,profile=baseline ! "
                 "h264parse ! "
                 "mpegtsmux ! "
                 f"hlssink2 location={segment_path} playlist-location={playlist_path} "
-                f"target-duration={segment_duration} max-files=5"
+                f"target-duration={segment_duration} max-files={max_segments}"
             )
         
-        logger.info(f"Created pipeline: {pipeline_str}")
+        logger.info(f"Created real-time optimized pipeline:")
+        logger.info(f"  Screen: {screen_index}")
+        logger.info(f"  Resolution: {width}x{height}")
+        logger.info(f"  FPS: {fps}")
+        logger.info(f"  Bitrate: {bitrate} kbps")
+        logger.info(f"  Target Latency: {target_latency_ms}ms")
+        logger.info(f"  Segment Duration: {segment_duration}s")
+        logger.info(f"  Max Segments: {max_segments}")
+        logger.info(f"  Encoder: {encoder}")
+        
         return pipeline_str
     
     def start_mediamtx(self):
