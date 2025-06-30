@@ -1,0 +1,45 @@
+# Log rotation for Desktop Streamer services
+/var/log/desktop-streamer.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 root root
+    postrotate
+        systemctl reload desktop-streamer.service > /dev/null 2>&1 || true
+    endscript
+}
+
+/var/log/desktop-streamer-watchdog.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 root root
+    postrotate
+        systemctl reload desktop-streamer-watchdog.service > /dev/null 2>&1 || true
+    endscript
+}
+
+# Systemd journal logs for desktop streamer
+/var/log/journal/*/desktop-streamer.service.journal {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+
+/var/log/journal/*/desktop-streamer-watchdog.service.journal {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+} 

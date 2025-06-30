@@ -1,6 +1,6 @@
 # Desktop Streamer with Self-Healing
 
-A robust, self-healing GStreamer-based desktop streaming service with comprehensive monitoring and automated recovery capabilities. This system captures your second monitor and streams it via HLS (HTTP Live Streaming) with built-in health monitoring, automatic recovery, and real-time alerts.
+A robust, self-healing GStreamer-based desktop streaming service with comprehensive monitoring and automated recovery capabilities. This system captures your second monitor and streams it via HLS (HTTP Live Streaming) with built-in health monitoring, automatic recovery, and real-time alerts. **Optimized for 24/7 kiosk operation with Unity workloads.**
 
 ## 🚀 Features
 
@@ -9,6 +9,7 @@ A robust, self-healing GStreamer-based desktop streaming service with comprehens
 - **HLS Streaming**: HTTP Live Streaming for broad device compatibility
 - **Configurable Quality**: Adjustable resolution, bitrate, and frame rate
 - **Low Latency**: Optimized for real-time streaming
+- **Live Streaming Optimized**: Minimal segment storage for live feeds
 
 ### Self-Healing & Monitoring
 - **Health Monitoring**: Continuous monitoring of pipeline state and performance
@@ -18,11 +19,18 @@ A robust, self-healing GStreamer-based desktop streaming service with comprehens
 - **Watchdog Service**: Independent monitoring service with alert capabilities
 - **Resource Monitoring**: CPU, memory, and disk usage tracking
 
+### Kiosk & 24/7 Operation
+- **Unity Workload Coexistence**: Optimized settings to not compete with Unity applications
+- **AMD SOC Optimization**: Hardware acceleration and GPU memory management
+- **Live Streaming**: Aggressive file cleanup keeping only recent segments
+- **Resource Limits**: CPU and memory quotas to prevent resource exhaustion
+- **Automatic Maintenance**: Self-cleaning to prevent disk space and memory issues
+
 ### Alert System
 - **Email Alerts**: Configurable SMTP-based email notifications
 - **Webhook Alerts**: Integration with Slack, Discord, and other platforms
 - **Alert Cooldown**: Prevents alert spam with intelligent rate limiting
-- **Severity Levels**: Warning, critical, and info level alerts
+- **Severity Levels**: Warning, critical, and info alert levels
 
 ### External Access
 - **Network Accessible**: All services bind to `0.0.0.0` for external access
@@ -44,19 +52,27 @@ A robust, self-healing GStreamer-based desktop streaming service with comprehens
 - **RAM**: 4GB+ (8GB+ recommended for high-quality streaming)
 - **Storage**: 10GB+ free space for HLS segments
 - **Network**: Stable network connection for streaming
+- **GPU**: AMD SOC with hardware acceleration support (optional)
 
 ## 🛠️ Installation
 
-### Quick Install
+### Quick Install (Recommended)
 ```bash
 # Clone the repository
 git clone <repository-url>
 cd gstreamer
 
-# Run the installation script
+# Run the installation script with kiosk optimizations
 chmod +x install.sh
 sudo ./install.sh
 ```
+
+The installation script will:
+- Install all dependencies including VAAPI for hardware acceleration
+- Set up kiosk-optimized configuration
+- Configure resource limits for Unity workload coexistence
+- Set up log rotation and automatic cleanup
+- Enable systemd services with proper resource constraints
 
 ### Manual Installation
 
@@ -69,7 +85,10 @@ sudo apt install -y python3 python3-pip python3-gi python3-gi-cairo gir1.2-gstre
     gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 \
     gstreamer1.0-qt5 gstreamer1.0-pulseaudio libgirepository1.0-dev \
     libcairo2-dev pkg-config python3-dev build-essential xrandr \
-    curl wget git
+    curl wget git htop iotop lshw logrotate
+
+# Install VAAPI for hardware acceleration (AMD SOC)
+sudo apt install -y vainfo intel-media-va-driver-non-free mesa-va-drivers mesa-vdpau-drivers
 ```
 
 2. **Install Python Dependencies**:
@@ -95,22 +114,8 @@ sudo cp desktop-streamer-watchdog.service /etc/systemd/system/
 # Create configuration directory
 sudo mkdir -p /etc/desktop-streamer
 
-# Create default configuration
-sudo tee /etc/desktop-streamer/config.json > /dev/null <<EOF
-{
-    "fps": 30,
-    "width": 1920,
-    "height": 1080,
-    "bitrate": 5000,
-    "keyframe_interval": 2,
-    "segment_duration": 2,
-    "output_dir": "/tmp/hls",
-    "max_restarts": 10,
-    "restart_delay": 30,
-    "max_errors": 5,
-    "error_window": 300
-}
-EOF
+# Copy kiosk-optimized configuration
+sudo cp kiosk-config.json /etc/desktop-streamer/config.json
 
 # Create watchdog configuration
 sudo tee /etc/desktop-streamer/watchdog-config.json > /dev/null <<EOF
@@ -138,6 +143,9 @@ sudo tee /etc/desktop-streamer/watchdog-config.json > /dev/null <<EOF
 }
 EOF
 
+# Setup log rotation
+sudo cp desktop-streamer-logrotate /etc/logrotate.d/desktop-streamer
+
 # Reload systemd and enable services
 sudo systemctl daemon-reload
 sudo systemctl enable desktop-streamer.service
@@ -157,6 +165,9 @@ sudo systemctl start desktop-streamer-watchdog.service
 # Check service status
 sudo systemctl status desktop-streamer.service
 sudo systemctl status desktop-streamer-watchdog.service
+
+# Quick status check
+desktop-streamer-monitor
 ```
 
 ### Accessing the System
@@ -169,6 +180,7 @@ sudo systemctl status desktop-streamer-watchdog.service
    - Service control (start/stop/restart)
    - Live logs and health metrics
    - Stream player and management
+   - Live stream cleanup tools
 
 2. **Health API** (For Integration):
    ```
@@ -193,6 +205,7 @@ The web dashboard provides comprehensive monitoring and control:
 - **Live Logs**: Real-time log streaming with filtering
 - **Stream Player**: Built-in HLS player for testing
 - **Management Tools**: Cleanup segments, refresh streams
+- **Live Streaming**: Optimized for live feed management
 
 ### API Endpoints
 
@@ -207,7 +220,9 @@ The web dashboard provides comprehensive monitoring and control:
     "mediamtx_running": true,
     "restart_count": 0,
     "last_error": "Pipeline paused unexpectedly",
-    "uptime_minutes": 45.2
+    "uptime_minutes": 45.2,
+    "memory_usage_mb": 245.6,
+    "system_memory_percent": 45.2
 }
 ```
 
@@ -223,8 +238,8 @@ The web dashboard provides comprehensive monitoring and control:
     },
     "stream": {
         "playlist_exists": true,
-        "segment_count": 15,
-        "total_size_mb": 45.2,
+        "segment_count": 5,
+        "total_size_mb": 2.5,
         "stream_active": true
     },
     "health": { ... },
@@ -242,17 +257,33 @@ The web dashboard provides comprehensive monitoring and control:
 
 ```json
 {
-    "fps": 30,                    // Frame rate
-    "width": 1920,                // Stream width
-    "height": 1080,               // Stream height
-    "bitrate": 5000,              // Bitrate in kbps
+    "fps": 15,                    // Frame rate (optimized for Unity)
+    "width": 1280,                // Stream width (720p for performance)
+    "height": 720,                // Stream height
+    "bitrate": 2000,              // Bitrate in kbps (2Mbps for live)
     "keyframe_interval": 2,       // Keyframe interval in seconds
     "segment_duration": 2,        // HLS segment duration
     "output_dir": "/tmp/hls",     // HLS output directory
-    "max_restarts": 10,           // Maximum restart attempts
-    "restart_delay": 30,          // Delay between restarts
-    "max_errors": 5,              // Error threshold for restart
-    "error_window": 300           // Error window in seconds
+    "max_restarts": 15,           // Maximum restart attempts
+    "restart_delay": 60,          // Delay between restarts
+    "max_errors": 10,             // Error threshold for restart
+    "error_window": 600,          // Error window in seconds
+    "encoder": "auto",            // Auto-detect hardware acceleration
+    "live_streaming": {
+        "enabled": true,
+        "max_segments": 5,        // Keep only 5 segments for live feed
+        "emergency_segments": 2,  // Emergency cleanup threshold
+        "cleanup_threshold_percent": 70,
+        "emergency_cleanup_threshold_percent": 85
+    },
+    "unity_optimization": {
+        "enabled": true,
+        "gpu_memory_limit_mb": 1024,
+        "cpu_quota_percent": 30,
+        "memory_limit_mb": 800,
+        "disk_cleanup_threshold_percent": 70,
+        "emergency_cleanup_threshold_percent": 85
+    }
 }
 ```
 
@@ -297,6 +328,8 @@ The system continuously monitors:
 4. **Resource Usage**: CPU, memory, and disk utilization
 5. **Error Patterns**: Error frequency and types
 6. **MediaMTX Status**: Streaming server health
+7. **GPU Memory**: AMD SOC GPU memory usage
+8. **Live Streaming**: Segment count and cleanup status
 
 ### Automatic Recovery
 
@@ -307,6 +340,16 @@ The system automatically recovers from:
 3. **Stream Issues**: Detects inactive streams and triggers recovery
 4. **High Resource Usage**: Monitors and alerts on resource exhaustion
 5. **Error Thresholds**: Restarts when error counts exceed limits
+6. **Disk Space Issues**: Automatic cleanup of old segments and logs
+7. **Memory Leaks**: Garbage collection and memory cleanup
+
+### Live Streaming Optimizations
+
+- **Minimal Storage**: Keeps only 5 most recent segments (~10 seconds)
+- **Aggressive Cleanup**: Automatic removal of old segments
+- **Emergency Mode**: Keeps only 2 segments when disk space is critical
+- **Low Latency**: Shorter playlist for faster startup
+- **Daily Maintenance**: Automated cleanup via cron jobs
 
 ### Alert System
 
@@ -317,7 +360,29 @@ Alerts are triggered for:
 - **High Error Count**: Warning when errors exceed threshold
 - **Frequent Restarts**: Critical alert for excessive restarts
 - **High Resource Usage**: Warning for CPU/memory issues
+- **High Disk Usage**: Warning when disk space is low
+- **High GPU Memory**: Warning for GPU memory issues
 - **Monitoring Errors**: Critical alert for watchdog failures
+
+## 🎯 Kiosk & Unity Workload Optimizations
+
+### Performance Settings
+- **Reduced Quality**: 15fps, 720p, 2Mbps for Unity coexistence
+- **Hardware Acceleration**: VAAPI support for AMD SOC
+- **Resource Limits**: CPU (30%) and memory (2GB) quotas
+- **Thread Optimization**: Limited to 2 threads for encoding
+
+### Unity Workload Coexistence
+- **GPU Memory Management**: Monitors and manages GPU memory usage
+- **CPU Quota**: Prevents streaming from consuming all CPU resources
+- **Memory Limits**: Prevents memory exhaustion
+- **Automatic Cleanup**: Prevents disk space issues
+
+### 24/7 Operation Features
+- **Log Rotation**: Automatic log file management
+- **Resource Monitoring**: Continuous resource tracking
+- **Self-Healing**: Automatic recovery from failures
+- **Watchdog Service**: Independent monitoring and alerting
 
 ## 🐛 Troubleshooting
 
@@ -330,6 +395,9 @@ Alerts are triggered for:
    
    # Check dependencies
    sudo systemctl status desktop-streamer.service
+   
+   # Check X11 permissions
+   xhost +local:root
    ```
 
 2. **Stream Not Working**:
@@ -368,6 +436,18 @@ Alerts are triggered for:
    curl http://localhost:8080
    ```
 
+5. **Live Streaming Issues**:
+   ```bash
+   # Check segment count
+   ls -la /tmp/hls/*.ts | wc -l
+   
+   # Manual cleanup
+   curl http://localhost:8080/api/stream/cleanup
+   
+   # Check disk space
+   df -h /tmp
+   ```
+
 ### Log Locations
 
 - **Main Service**: `/var/log/desktop-streamer.log`
@@ -377,28 +457,33 @@ Alerts are triggered for:
 
 ### Performance Tuning
 
-1. **Reduce Quality for Better Performance**:
+1. **For Better Unity Performance**:
    ```json
    {
-       "fps": 15,
-       "width": 1280,
-       "height": 720,
-       "bitrate": 2000
+       "fps": 10,
+       "width": 960,
+       "height": 540,
+       "bitrate": 1000
    }
    ```
 
-2. **Increase Error Tolerance**:
+2. **For Higher Quality Streaming**:
    ```json
    {
-       "max_errors": 10,
-       "error_window": 600
+       "fps": 30,
+       "width": 1920,
+       "height": 1080,
+       "bitrate": 5000
    }
    ```
 
-3. **Adjust Monitoring Frequency**:
+3. **For More Aggressive Cleanup**:
    ```json
    {
-       "check_interval": 60
+       "live_streaming": {
+           "max_segments": 3,
+           "emergency_segments": 1
+       }
    }
    ```
 
@@ -408,6 +493,7 @@ Alerts are triggered for:
 2. **Service Permissions**: Services run as root for X11 access - consider security implications
 3. **API Access**: Health API is publicly accessible - implement authentication if needed
 4. **Log Security**: Logs may contain sensitive information - secure log files appropriately
+5. **Resource Limits**: Configured to prevent resource exhaustion attacks
 
 ## 📊 Performance Metrics
 
@@ -419,6 +505,8 @@ The system provides comprehensive performance metrics:
 - **Error Rates**: Error frequency and types
 - **Uptime**: Service availability and restart frequency
 - **Recovery Time**: Time to recover from failures
+- **Live Streaming**: Segment count and cleanup frequency
+- **Unity Coexistence**: Resource usage and conflicts
 
 ## 🤝 Contributing
 
@@ -439,8 +527,9 @@ For issues and questions:
 1. Check the troubleshooting section
 2. Review the logs for error messages
 3. Check the web dashboard for health metrics
-4. Open an issue on GitHub with detailed information
+4. Use the monitoring script: `desktop-streamer-monitor`
+5. Open an issue on GitHub with detailed information
 
 ---
 
-**Note**: This system is designed for production use with comprehensive monitoring and self-healing capabilities. The watchdog service provides an additional layer of monitoring and can automatically recover from many common failure scenarios.
+**Note**: This system is designed for production use with comprehensive monitoring and self-healing capabilities. The kiosk optimizations ensure stable 24/7 operation with Unity workloads, while the live streaming optimizations maintain minimal resource usage for real-time feeds.

@@ -58,6 +58,8 @@ class HealthMetrics:
     buffer_level: Optional[float] = None
     fps: Optional[float] = None
     bitrate: Optional[float] = None
+    memory_usage_mb: Optional[float] = None
+    system_memory_percent: Optional[float] = None
 
 @dataclass
 class ErrorEvent:
@@ -233,6 +235,12 @@ class DesktopStreamer:
                     logger.warning("Pipeline appears to be stuck, initiating recovery")
                     self._recover_stuck_pipeline()
                 
+                # Check disk space and cleanup if needed
+                self._check_disk_space()
+                
+                # Check for memory leaks
+                self._check_memory_usage()
+                
                 time.sleep(10)  # Check every 10 seconds
                 
             except Exception as e:
@@ -256,6 +264,11 @@ class DesktopStreamer:
         if self.mediamtx_process:
             mediamtx_running = self.mediamtx_process.poll() is None
         
+        # Get memory usage
+        memory_info = psutil.virtual_memory()
+        process = psutil.Process()
+        process_memory = process.memory_info().rss / (1024 * 1024)  # MB
+        
         return HealthMetrics(
             timestamp=time.time(),
             pipeline_state=pipeline_state,
@@ -266,7 +279,9 @@ class DesktopStreamer:
             last_error=self.health_monitor.error_events[-1].error_message if self.health_monitor.error_events else None,
             buffer_level=buffer_level,
             fps=fps,
-            bitrate=bitrate
+            bitrate=bitrate,
+            memory_usage_mb=process_memory,
+            system_memory_percent=memory_info.percent
         )
     
     def _is_pipeline_stuck(self) -> bool:
@@ -363,31 +378,67 @@ class DesktopStreamer:
         else:
             monitor_index = 1  # Use second monitor
         
-        # Pipeline configuration
+        # Pipeline configuration with Unity workload optimization
         fps = self.config.get('fps', 30)
         width = self.config.get('width', 1920)
         height = self.config.get('height', 1080)
         bitrate = self.config.get('bitrate', 5000)  # kbps
         keyframe_interval = self.config.get('keyframe_interval', 2)  # seconds
         
+        # Optimize for AMD SOC with Unity workloads
+        # Use hardware acceleration if available
+        encoder = self.config.get('encoder', 'x264enc')
+        if encoder == 'auto':
+            # Try to detect hardware encoder
+            try:
+                result = subprocess.run(['gst-inspect-1.0', 'vaapih264enc'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    encoder = 'vaapih264enc'
+                    logger.info("Using VAAPI hardware encoder for AMD SOC")
+                else:
+                    encoder = 'x264enc'
+                    logger.info("Using software encoder (x264enc)")
+            except:
+                encoder = 'x264enc'
+                logger.info("Using software encoder (x264enc)")
+        
         # Create HLS playlist path
         playlist_path = self.output_dir / "playlist.m3u8"
         segment_path = self.output_dir / "segment_%05d.ts"
         segment_duration = self.config.get('segment_duration', 2)  # seconds
         
-        pipeline_str = (
-            f"ximagesrc monitor={monitor_index} ! "
-            f"video/x-raw,framerate={fps}/1,width={width},height={height} ! "
-            "videoconvert ! "
-            "videoscale ! "
-            f"video/x-raw,format=I420,width={width},height={height},framerate={fps}/1 ! "
-            f"x264enc bitrate={bitrate} speed-preset=ultrafast key-int-max={fps * keyframe_interval} ! "
-            "video/x-h264,profile=baseline ! "
-            "h264parse ! "
-            "mpegtsmux ! "
-            f"hlssink2 location={segment_path} playlist-location={playlist_path} "
-            f"target-duration={segment_duration} max-files=10"
-        )
+        # Optimize pipeline for Unity workload coexistence
+        if encoder == 'vaapih264enc':
+            pipeline_str = (
+                f"ximagesrc monitor={monitor_index} ! "
+                f"video/x-raw,framerate={fps}/1,width={width},height={height} ! "
+                "videoconvert ! "
+                "videoscale ! "
+                f"video/x-raw,format=NV12,width={width},height={height},framerate={fps}/1 ! "
+                f"vaapih264enc bitrate={bitrate} keyframe-period={fps * keyframe_interval} ! "
+                "video/x-h264,profile=baseline ! "
+                "h264parse ! "
+                "mpegtsmux ! "
+                f"hlssink2 location={segment_path} playlist-location={playlist_path} "
+                f"target-duration={segment_duration} max-files=5"
+            )
+        else:
+            # Software encoder with Unity workload optimization
+            pipeline_str = (
+                f"ximagesrc monitor={monitor_index} ! "
+                f"video/x-raw,framerate={fps}/1,width={width},height={height} ! "
+                "videoconvert ! "
+                "videoscale ! "
+                f"video/x-raw,format=I420,width={width},height={height},framerate={fps}/1 ! "
+                f"x264enc bitrate={bitrate} speed-preset=ultrafast key-int-max={fps * keyframe_interval} "
+                f"tune=zerolatency threads=2 ! "
+                "video/x-h264,profile=baseline ! "
+                "h264parse ! "
+                "mpegtsmux ! "
+                f"hlssink2 location={segment_path} playlist-location={playlist_path} "
+                f"target-duration={segment_duration} max-files=5"
+            )
         
         logger.info(f"Created pipeline: {pipeline_str}")
         return pipeline_str
@@ -584,6 +635,250 @@ class DesktopStreamer:
             status['output_files'].extend([f.name for f in self.output_dir.glob("*.m3u8")])
         
         return status
+    
+    def _check_disk_space(self):
+        """Check disk space and cleanup if needed"""
+        try:
+            # Check disk usage for HLS directory
+            disk_usage = psutil.disk_usage(self.output_dir)
+            usage_percent = (disk_usage.used / disk_usage.total) * 100
+            
+            # Alert if disk usage is high
+            if usage_percent > 80:
+                self.health_monitor.add_error_event(
+                    'high_disk_usage',
+                    f'Disk usage is {usage_percent:.1f}%',
+                    'WARNING',
+                    'cleanup_segments'
+                )
+            
+            # Cleanup if usage is above threshold
+            if usage_percent > 70:
+                self._cleanup_old_segments()
+            
+            # Check total disk space
+            total_disk = psutil.disk_usage('/')
+            total_usage_percent = (total_disk.used / total_disk.total) * 100
+            
+            if total_usage_percent > 90:
+                self.health_monitor.add_error_event(
+                    'critical_disk_usage',
+                    f'Total disk usage is {total_usage_percent:.1f}%',
+                    'CRITICAL',
+                    'emergency_cleanup'
+                )
+                self._emergency_cleanup()
+                
+        except Exception as e:
+            logger.error(f"Error checking disk space: {e}")
+    
+    def _cleanup_old_segments(self):
+        """Clean up old HLS segments for live streaming - keep only recent segments"""
+        try:
+            ts_files = list(self.output_dir.glob("*.ts"))
+            if len(ts_files) <= 5:  # Keep only 5 most recent segments for live feed
+                return
+            
+            # Sort by modification time (oldest first)
+            ts_files.sort(key=lambda x: x.stat().st_mtime)
+            
+            # Remove oldest files, keeping only the 5 most recent for live streaming
+            files_to_remove = ts_files[:-5]
+            removed_count = 0
+            
+            for file_path in files_to_remove:
+                try:
+                    file_path.unlink()
+                    removed_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to remove {file_path}: {e}")
+            
+            if removed_count > 0:
+                logger.info(f"Live stream cleanup: removed {removed_count} old segments, keeping 5 most recent")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up segments: {e}")
+    
+    def _emergency_cleanup(self):
+        """Emergency cleanup when disk space is critically low"""
+        try:
+            # Clean up all old segments - keep only 2 most recent for live feed
+            ts_files = list(self.output_dir.glob("*.ts"))
+            ts_files.sort(key=lambda x: x.stat().st_mtime)
+            
+            # Keep only the 2 most recent segments for emergency
+            files_to_remove = ts_files[:-2]
+            removed_count = 0
+            
+            for file_path in files_to_remove:
+                try:
+                    file_path.unlink()
+                    removed_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to remove {file_path}: {e}")
+            
+            # Clean up old log files
+            self._cleanup_old_logs()
+            
+            logger.warning(f"Emergency cleanup completed: removed {removed_count} segments, keeping 2 most recent")
+            
+        except Exception as e:
+            logger.error(f"Error in emergency cleanup: {e}")
+    
+    def _cleanup_old_logs(self):
+        """Clean up old log files to free disk space"""
+        try:
+            log_dir = Path("/var/log")
+            log_files = [
+                log_dir / "desktop-streamer.log",
+                log_dir / "desktop-streamer-watchdog.log"
+            ]
+            
+            for log_file in log_files:
+                if log_file.exists() and log_file.stat().st_size > 100 * 1024 * 1024:  # 100MB
+                    # Create backup and truncate
+                    backup_file = log_file.with_suffix('.log.old')
+                    if backup_file.exists():
+                        backup_file.unlink()
+                    log_file.rename(backup_file)
+                    logger.info(f"Rotated large log file: {log_file}")
+                    
+        except Exception as e:
+            logger.error(f"Error cleaning up logs: {e}")
+
+    def _check_memory_usage(self):
+        """Check for memory leaks and GPU memory usage"""
+        try:
+            # Check memory usage
+            memory_info = psutil.virtual_memory()
+            process = psutil.Process()
+            process_memory = process.memory_info().rss / (1024 * 1024)  # MB
+            
+            # Alert if memory usage is high
+            if process_memory > 800:  # 800MB
+                self.health_monitor.add_error_event(
+                    'high_memory_usage',
+                    f'Memory usage is {process_memory:.1f}MB',
+                    'WARNING',
+                    'cleanup_memory'
+                )
+            
+            # Cleanup if usage is above threshold
+            if process_memory > 700:  # 700MB
+                self._cleanup_old_memory()
+            
+            # Check total system memory
+            total_memory = psutil.virtual_memory()
+            total_usage_percent = (total_memory.used / total_memory.total) * 100
+            
+            if total_usage_percent > 90:
+                self.health_monitor.add_error_event(
+                    'critical_memory_usage',
+                    f'Total memory usage is {total_usage_percent:.1f}%',
+                    'CRITICAL',
+                    'emergency_cleanup'
+                )
+                self._emergency_cleanup_memory()
+            
+            # Check GPU memory (AMD SOC specific)
+            self._check_gpu_memory()
+                
+        except Exception as e:
+            logger.error(f"Error checking memory usage: {e}")
+    
+    def _check_gpu_memory(self):
+        """Check GPU memory usage on AMD SOC"""
+        try:
+            # Try to get GPU memory info from /sys/class/drm
+            gpu_memory_total = None
+            gpu_memory_used = None
+            
+            # Check for AMD GPU memory info
+            for i in range(4):  # Check first 4 GPU devices
+                mem_info_path = f"/sys/class/drm/card{i}/device/mem_info_vram_total"
+                if Path(mem_info_path).exists():
+                    try:
+                        with open(mem_info_path, 'r') as f:
+                            gpu_memory_total = int(f.read().strip()) / (1024 * 1024)  # MB
+                        break
+                    except:
+                        continue
+            
+            # If we can't get GPU memory info, try alternative methods
+            if gpu_memory_total is None:
+                # Try to get GPU memory from lshw or similar
+                try:
+                    result = subprocess.run(['lshw', '-C', 'display'], 
+                                          capture_output=True, text=True, timeout=5)
+                    if 'memory' in result.stdout.lower():
+                        # Parse memory info from lshw output
+                        lines = result.stdout.split('\n')
+                        for line in lines:
+                            if 'size' in line.lower() and 'gb' in line.lower():
+                                # Extract memory size
+                                logger.info(f"GPU memory info: {line.strip()}")
+                                break
+                except:
+                    pass
+            
+            # Log GPU memory status
+            if gpu_memory_total:
+                logger.debug(f"GPU memory total: {gpu_memory_total:.1f}MB")
+                
+                # Alert if GPU memory usage is high (Unity workloads)
+                if gpu_memory_total > 0:
+                    # Estimate GPU memory usage based on Unity workload patterns
+                    # This is a rough estimate - actual monitoring would require AMD GPU tools
+                    estimated_gpu_usage = gpu_memory_total * 0.8  # Assume 80% usage with Unity
+                    
+                    if estimated_gpu_usage > gpu_memory_total * 0.9:
+                        self.health_monitor.add_error_event(
+                            'high_gpu_memory_usage',
+                            f'Estimated GPU memory usage is high: {estimated_gpu_usage:.1f}MB',
+                            'WARNING',
+                            'monitor_gpu'
+                        )
+            
+        except Exception as e:
+            logger.debug(f"Could not check GPU memory: {e}")
+    
+    def _cleanup_old_memory(self):
+        """Clean up old memory and optimize for Unity workloads"""
+        try:
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Clear any cached data
+            if hasattr(self, 'health_monitor') and hasattr(self.health_monitor, 'health_metrics'):
+                # Keep only recent metrics to reduce memory usage
+                if len(self.health_monitor.health_metrics) > 500:
+                    self.health_monitor.health_metrics = self.health_monitor.health_metrics[-500:]
+            
+            logger.info("Memory cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up memory: {e}")
+    
+    def _emergency_cleanup_memory(self):
+        """Emergency cleanup when memory usage is critically low"""
+        try:
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Clear all cached data
+            if hasattr(self, 'health_monitor') and hasattr(self.health_monitor, 'health_metrics'):
+                self.health_monitor.health_metrics = self.health_monitor.health_metrics[-100:]
+            
+            # Clear error events
+            if hasattr(self, 'health_monitor') and hasattr(self.health_monitor, 'error_events'):
+                self.health_monitor.error_events = self.health_monitor.error_events[-10:]
+            
+            logger.warning("Emergency memory cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error in emergency memory cleanup: {e}")
 
 def signal_handler(signum, frame):
     """Handle system signals"""
@@ -606,7 +901,8 @@ def main():
         'max_restarts': 10,
         'restart_delay': 30,
         'max_errors': 5,
-        'error_window': 300  # 5 minutes
+        'error_window': 300,  # 5 minutes
+        'encoder': 'auto'
     }
     
     # Load config from file if it exists

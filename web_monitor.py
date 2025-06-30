@@ -435,20 +435,20 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/api/stream/cleanup")
 async def cleanup_stream():
-    """Clean up old HLS segments"""
+    """Clean up old HLS segments for live streaming"""
     try:
-        # Remove old TS files (keep last 10)
+        # Remove old TS files (keep only last 5 for live feed)
         ts_files = list(monitor.hls_dir.glob("*.ts"))
         ts_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         
         removed_count = 0
-        for ts_file in ts_files[10:]:  # Keep only the 10 most recent
+        for ts_file in ts_files[5:]:  # Keep only the 5 most recent
             ts_file.unlink()
             removed_count += 1
         
         return {
             "success": True, 
-            "message": f"Cleaned up {removed_count} old segments",
+            "message": f"Live stream cleanup: removed {removed_count} old segments, keeping 5 most recent",
             "remaining_segments": len(ts_files) - removed_count
         }
     except Exception as e:

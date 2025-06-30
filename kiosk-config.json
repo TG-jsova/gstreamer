@@ -1,0 +1,41 @@
+{
+    "fps": 15,
+    "width": 1280,
+    "height": 720,
+    "bitrate": 2000,
+    "keyframe_interval": 2,
+    "segment_duration": 2,
+    "output_dir": "/tmp/hls",
+    "max_restarts": 15,
+    "restart_delay": 60,
+    "max_errors": 10,
+    "error_window": 600,
+    "encoder": "auto",
+    "live_streaming": {
+        "enabled": true,
+        "max_segments": 5,
+        "emergency_segments": 2,
+        "cleanup_threshold_percent": 70,
+        "emergency_cleanup_threshold_percent": 85
+    },
+    "unity_optimization": {
+        "enabled": true,
+        "gpu_memory_limit_mb": 1024,
+        "cpu_quota_percent": 30,
+        "memory_limit_mb": 800,
+        "disk_cleanup_threshold_percent": 70,
+        "emergency_cleanup_threshold_percent": 85
+    },
+    "monitoring": {
+        "check_interval_seconds": 30,
+        "health_metrics_history_size": 1000,
+        "error_events_history_size": 100,
+        "log_rotation_mb": 50
+    },
+    "performance": {
+        "low_latency_mode": true,
+        "hardware_acceleration": true,
+        "thread_count": 2,
+        "buffer_size": 1024
+    }
+} 
