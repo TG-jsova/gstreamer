@@ -1,6 +1,0 @@
-apiVersion: v2
-name: gstreamer
-description: A Helm chart for GStreamer MP3 streaming application
-type: application
-version: 0.1.0
-appVersion: "1.0.0" 
