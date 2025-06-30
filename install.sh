@@ -50,25 +50,49 @@ apt install -y python3 python3-pip python3-gi python3-gi-cairo gir1.2-gstreamer-
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 \
     gstreamer1.0-qt5 gstreamer1.0-pulseaudio libgirepository1.0-dev \
-    libcairo2-dev pkg-config python3-dev build-essential xrandr \
+    libcairo2-dev pkg-config python3-dev build-essential \
+    meson ninja-build \
     curl wget git htop iotop lshw logrotate
+
+# Install newer version of meson via pip (system version is too old)
+print_status "Installing newer version of meson..."
+pip3 install --upgrade meson
+
+# Ensure pip-installed meson is in PATH
+export PATH="$HOME/.local/bin:$PATH"
+
+# Install pycairo separately to avoid build issues
+print_status "Installing pycairo..."
+pip3 install pycairo
+
+# Install PyGObject from system packages to avoid build issues
+print_status "Installing PyGObject from system packages..."
+apt install -y python3-gi python3-gi-cairo
+
+# Install remaining Python dependencies (excluding PyGObject)
+print_status "Installing remaining Python dependencies..."
+pip3 install fastapi==0.104.1 uvicorn[standard]==0.24.0 psutil==5.9.6 requests==2.31.0 pyyaml==6.0.1 jinja2==3.1.2 python-multipart==0.0.6 pytest==7.4.3 pytest-asyncio==0.21.1
 
 # Install VAAPI for hardware acceleration (AMD SOC)
 print_status "Installing VAAPI for hardware acceleration..."
 apt install -y vainfo intel-media-va-driver-non-free mesa-va-drivers mesa-vdpau-drivers
 
-# Install Python dependencies
-print_status "Installing Python dependencies..."
-pip3 install -r desktop_streamer_requirements.txt
+# # Install Python dependencies
+# print_status "Installing Python dependencies..."
+# pip3 install -r desktop_streamer_requirements.txt
 
 # Install MediaMTX
 print_status "Installing MediaMTX..."
 if ! command -v mediamtx &> /dev/null; then
-    wget https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_linux_amd64.tar.gz
-    tar -xzf mediamtx_linux_amd64.tar.gz
+    mkdir -p /tmp/mediamtx
+    cd /tmp/mediamtx
+    wget https://github.com/bluenviron/mediamtx/releases/download/v1.12.3/mediamtx_v1.12.3_linux_arm64.tar.gz
+    tar -xzf mediamtx_v1.12.3_linux_arm64.tar.gz
     mv mediamtx /usr/local/bin/
     chmod +x /usr/local/bin/mediamtx
-    rm mediamtx_linux_amd64.tar.gz
+    # rm mediamtx_linux_amd64.tar.gz
+    cd /tmp
+    rm -rf /tmp/mediamtx
     print_status "MediaMTX installed successfully"
 else
     print_status "MediaMTX already installed"
